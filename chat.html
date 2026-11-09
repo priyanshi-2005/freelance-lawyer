@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Legal Intake Assistant</title>
+<style>
+:root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; color: #1d2926; background: #f4f6f4; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 800px; padding: 30px 20px; margin: auto; }
+header { border-bottom: 1px solid #cdd9d1; padding-bottom: 16px; margin-bottom: 18px; }
+h1 { font-size: clamp(1.45rem, 5vw, 2rem); line-height: 1.2; margin: 0 0 6px; }
+header p { margin: 0; color: #46534d; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+button, #make-summary { cursor: pointer; background: white; border: 1px solid #9fb4a7; border-radius: 7px; color: inherit; padding: 8px 12px; font: inherit; }
+#make-summary:not([hidden]) { display: inline-block; text-decoration: none; }
+button:disabled { cursor: wait; opacity: .6; }
+button.primary { background: #19503b; color: white; border-color: #19503b; }
+button.reset { margin-inline-start: auto; }
+details, #case-panel { border: 1px solid #cdd9d1; background: white; border-radius: 7px; margin-bottom: 14px; padding: 9px 12px; }
+summary { cursor: pointer; font-weight: 600; }
+small { color: #46534d; }
+dl { margin: 8px 0; }
+dt { font-weight: 600; }
+dd { margin: 0 0 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
+#messages { display: flex; flex-direction: column; gap: 10px; min-height: 130px; max-height: 48vh; overflow: auto; padding: 4px 3px 10px; }
+#full-conversation:target #messages { max-height: none; overflow: visible; }
+.message { margin: 0; max-width: 90%; padding: 11px 13px; border: 1px solid #d9e2dc; background: white; border-radius: 9px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.user { align-self: flex-end; background: #e3efe6; }
+.message a { display: block; color: #19503b; margin-top: 6px; }
+.message-options { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.legal-resources { margin: 0 0 5px; font-size: .875rem; color: #46534d; }
+.legal-resources a { color: #19503b; }
+#chat-form { margin-top: 10px; }
+.compose-row { display: flex; gap: 8px; align-items: end; }
+textarea { min-width: 0; width: 100%; resize: vertical; font: inherit; border: 1px solid #9fb4a7; border-radius: 7px; padding: 9px; }
+#status { min-height: 1.5em; color: #46534d; }
+#draft { white-space: pre-wrap; }
+#upload-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+#upload-form label, #upload-form small { font-size: .875rem; }
+#upload-form small { flex-basis: 100%; }
+#upload-file { max-width: 100%; }
+.message .attachment-label { display: block; margin-top: 4px; }
+#case-attachments a { color: #19503b; }
+#case-attachments p { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main id="full-conversation">
+  <header>
+    <h1>Legal Intake Assistant</h1>
+    <p>Organize an everyday legal problem in India and find a practical next step.</p>
+  </header>
+  <div class="actions">
+    <button id="view-case" type="button" aria-controls="case-panel" aria-expanded="false">View case file</button>
+    <button id="make-payment-draft" type="button" hidden>Draft payment demand</button>
+    <button id="reset" class="reset" type="button">Start new case</button>
+  </div>
+  <section id="case-panel" aria-label="Case file" hidden>
+    <small>Details and records you report in this chat.</small>
+    <dl id="case-file"></dl>
+    <div id="case-attachments"></div>
+    <a id="make-summary" href="/case.pdf" download="case-file.pdf" hidden>Download case file as PDF</a>
+  </section>
+  <section id="messages" role="log" aria-label="Chat conversation"></section>
+  <form id="chat-form">
+    <div class="compose-row">
+      <textarea id="message" rows="2" maxlength="2500" aria-label="Your message" placeholder="Tell me what happened in your own words"></textarea>
+      <button class="primary" type="submit">Send</button>
+    </div>
+    <div id="upload-form">
+      <label for="upload-purpose">Attach as</label>
+      <select id="upload-purpose">
+        <option value="evidence">Evidence</option>
+        <option value="form">Form</option>
+      </select>
+      <input id="upload-file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" aria-label="Choose a PDF or photo">
+      <button id="remove-file" type="button" hidden>Remove attachment</button>
+      <small>PDF, PNG, or JPG up to 5 MB. Files go with your message when you press Send. Keep PINs, OTPs, and passwords out of uploads.</small>
+    </div>
+  </form>
+  <div id="status" role="status"></div>
+  <details id="draft-panel" hidden>
+    <summary id="draft-title">Case summary</summary>
+    <p id="draft"></p>
+    <button id="copy" type="button">Copy text</button>
+  </details>
+  <p class="legal-resources">Legal resources · The <a href="https://nalsa.gov.in/legal-aid/" target="_blank" rel="noopener noreferrer">National Legal Services Authority</a> explains who can apply for free legal aid and how to apply.</p>
+  <small>General legal information and case preparation for your review.</small>
+</main>
+<script>
+const byId = id => document.getElementById(id);
+const messages = byId("messages");
+const input = byId("message");
+const fileInput = byId("upload-file");
+const uploadPurpose = byId("upload-purpose");
+const removeFile = byId("remove-file");
+const status = byId("status");
+let busy = false;
+
+function addMessage(text, fromUser = false, sources = [], choices = [], download, attachmentLabel) {
+  const entry = document.createElement("div");
+  entry.className = fromUser ? "message user" : "message";
+  entry.textContent = text;
+  if (attachmentLabel) {
+    const file = document.createElement("small");
+    file.className = "attachment-label";
+    file.textContent = attachmentLabel;
+    entry.append(file);
+  }
+  for (const source of sources) {
+    const link = document.createElement("a");
+    link.href = source.url;
+    link.textContent = source.label;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    entry.append(link);
+  }
+  if (download) {
+    const link = document.createElement("a");
+    link.href = download.url;
+    link.download = download.name;
+    link.textContent = "Download " + download.name;
+    entry.append(link);
+  }
+  if (choices.length) {
+    const options = document.createElement("div");
+    options.className = "message-options";
+    choices.forEach(choice => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = choice.label;
+      button.addEventListener("click", () => send("choose", choice.label, choice.id));
+      options.append(button);
+    });
+    entry.append(options);
+  }
+  messages.append(entry);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function showCase(caseFile) {
+  const list = byId("case-file");
+  list.replaceChildren();
+  const facts = Object.entries(caseFile.facts);
+  for (const [key, values] of Object.entries(caseFile.records)) {
+    facts.push([`Reported proof for ${key.toLowerCase()}`, values.join(", ")]);
+  }
+  for (const [key, value] of facts.length ? facts : [["Status", "No case details yet."]]) {
+    const label = document.createElement("dt");
+    const item = document.createElement("dd");
+    label.textContent = key;
+    item.textContent = value;
+    list.append(label, item);
+  }
+  const attachments = byId("case-attachments");
+  attachments.replaceChildren();
+  for (const file of caseFile.attachments || []) {
+    const entry = document.createElement("details");
+    const label = document.createElement("summary");
+    label.textContent = (file.purpose === "form" ? "Form · " : "Evidence · ") + file.name;
+    const link = document.createElement("a");
+    link.href = file.url;
+    link.download = file.name;
+    link.textContent = "Download original";
+    entry.append(label, link);
+    for (const page of file.pages) {
+      const preview = document.createElement("p");
+      preview.textContent = `Page ${page.page} · ${page.method}\n${page.preview || "No clear text extracted."}`;
+      entry.append(preview);
+    }
+    attachments.append(entry);
+  }
+}
+
+function clearFile() {
+  fileInput.value = "";
+  removeFile.hidden = true;
+}
+
+async function send(action, message, choice, upload) {
+  if (busy) return;
+  busy = true;
+  document.querySelectorAll("button").forEach(button => button.disabled = true);
+  fileInput.disabled = uploadPurpose.disabled = true;
+  input.readOnly = true;
+  status.textContent = upload ? "Reading the attachment…" : action === "message" ? "Reading your message…" : "";
+  try {
+    let attachment;
+    if (upload) {
+      const reader = new FileReader();
+      const encoded = await new Promise((resolve, reject) => {
+        reader.addEventListener("load", () => resolve(reader.result.split(",", 2)[1]));
+        reader.addEventListener("error", () => reject(Error("I couldn’t open that file. Try selecting it again.")));
+        reader.readAsDataURL(upload.file);
+      });
+      attachment = {name: upload.file.name, purpose: upload.purpose, content: encoded};
+    }
+    const response = await fetch("/chat", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({action, message, choice, attachment})
+    });
+    const data = await response.json();
+    if (!response.ok) throw Error(data.error || "The prototype couldn’t process your request.");
+    if (action === "reset") {
+      messages.replaceChildren();
+      input.value = "";
+      clearFile();
+      byId("case-panel").hidden = true;
+      byId("view-case").setAttribute("aria-expanded", "false");
+    }
+    if (["reset", "message", "draft", "choose"].includes(action)) byId("draft-panel").hidden = true;
+    if (action === "message") {
+      addMessage(message, true, [], [], undefined, data.attachment_label);
+      input.value = "";
+      clearFile();
+    } else if (action === "choose") {
+      addMessage(message, true);
+    }
+    addMessage(data.reply, false, data.sources || (data.source ? [data.source] : []), data.choices, data.download);
+    if (action === "open") {
+      for (const entry of data.transcript || []) {
+        if (entry.user || entry.attachment_label) addMessage(entry.user || "", true, [], [], undefined, entry.attachment_label);
+        addMessage(entry.reply, false, entry.sources || (entry.source ? [entry.source] : []), entry.choices, entry.download);
+      }
+    }
+    showCase(data.case);
+    byId("make-payment-draft").hidden = !data.payment_flow;
+    byId("make-summary").hidden = Object.keys(data.case.facts).length === 0 && !data.case.attachments?.length;
+    if (data.draft) {
+      byId("draft-title").textContent = data.draft_title || (data.payment_flow ? "Payment demand draft" : "Case summary");
+      byId("draft").textContent = data.draft;
+      byId("draft-panel").hidden = false;
+      byId("draft-panel").open = true;
+    }
+    status.textContent = "";
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    document.querySelectorAll("button").forEach(button => button.disabled = false);
+    fileInput.disabled = uploadPurpose.disabled = false;
+    input.readOnly = false;
+    busy = false;
+  }
+}
+
+const form = byId("chat-form");
+form.addEventListener("submit", event => {
+  event.preventDefault();
+  const message = input.value.trim();
+  const file = fileInput.files[0];
+  if (message || file) send("message", message, undefined, file ? {file, purpose: uploadPurpose.value} : undefined);
+});
+input.addEventListener("keydown", event => {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+  event.preventDefault();
+  if (!event.repeat && (input.value.trim() || fileInput.files.length)) form.requestSubmit();
+});
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files[0];
+  if (file && file.size > 5 * 1024 * 1024) {
+    clearFile();
+    status.textContent = "Choose a PDF, PNG, or JPG up to 5 MB.";
+    return;
+  }
+  removeFile.hidden = !file;
+  status.textContent = "";
+});
+removeFile.addEventListener("click", clearFile);
+byId("reset").addEventListener("click", () => send("reset"));
+byId("view-case").addEventListener("click", () => {
+  const panel = byId("case-panel");
+  panel.hidden = !panel.hidden;
+  byId("view-case").setAttribute("aria-expanded", String(!panel.hidden));
+});
+byId("make-payment-draft").addEventListener("click", () => send("draft"));
+byId("copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(byId("draft").textContent);
+    status.textContent = "Copied.";
+  } catch {
+    status.textContent = "Select the text to copy it.";
+  }
+});
+send("open");
+</script>
+</body>
+</html>
