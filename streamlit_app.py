@@ -15,7 +15,7 @@ st.markdown(
     """
     <style>
     .stApp { color: #1d2926; }
-    .block-container { max-width: 1120px; padding-top: 2rem; padding-bottom: 2rem; }
+    [data-testid="stMainBlockContainer"] { max-width: 1120px; padding-top: 2rem; padding-bottom: 2rem; }
     h1 { letter-spacing: -0.025em; }
     [data-testid="stChatMessage"] { border: 1px solid #d7e1dc; border-radius: 16px; }
     [data-testid="stChatMessage"] p { font-size: 1.02rem; }
@@ -23,8 +23,23 @@ st.markdown(
     [data-testid="stFileUploaderDropzoneInstructions"] { display: none; }
     [data-testid="stFileUploaderDropzone"] button { margin: 0; }
     [data-testid="stFileUploader"] small { display: none; }
-    [data-testid="stTextArea"] textarea { min-height: 90px; }
-    [data-testid="stForm"] { margin-top: 4rem; }
+    [data-testid="stChatInput"] { margin-top: 2rem; }
+    [data-testid="stChatInput"] [data-testid="stChatInputTextArea"] {
+        min-height: 88px !important;
+        padding-top: 14px !important;
+    }
+    [data-testid="stChatInputSubmitButton"] {
+        width: 72px;
+        height: 42px;
+        border-radius: 8px;
+        margin: 0 8px 8px 0;
+    }
+    [data-testid="stChatInputSubmitButton"]:not(:disabled) {
+        background: #175c46;
+        color: #fff;
+    }
+    [data-testid="stChatInputSubmitButton"] svg { display: none; }
+    [data-testid="stChatInputSubmitButton"]::after { content: "Send"; font-size: 0.94rem; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -206,21 +221,29 @@ case_panel()
 for index, message in enumerate(st.session_state.messages):
     render_message(message, index)
 
-# Chat-style input: Enter sends, Shift+Enter adds a new line, and the clip
-# attaches evidence (PDF/photo/screenshot) in the same bar.
-prompt = st.chat_input(
-    "Tell me what happened in your own words",
-    accept_file=True,
-    file_type=("pdf", "png", "jpg", "jpeg"),
-    max_chars=2500,
-)
-if prompt:
-    files = getattr(prompt, "files", None) or []
-    text = getattr(prompt, "text", "") or ""
-    submit(text, files[0] if files else None)
-    st.rerun()
+if "evidence_input_key" not in st.session_state:
+    st.session_state.evidence_input_key = 0
 
-st.caption("Attach evidence (a PDF, photo, or screenshot, up to 5 MB) with the clip. Enter sends; Shift+Enter adds a line. Keep PINs, OTPs, and passwords out of uploads.")
+with st.container():
+    prompt = st.chat_input(
+        "Tell me what happened in your own words",
+        max_chars=2500,
+    )
+    upload = st.file_uploader(
+        "Attach evidence (if any)",
+        type=("pdf", "png", "jpg", "jpeg"),
+        key=f"evidence-input-{st.session_state.evidence_input_key}",
+    )
+    send_evidence = st.button("Send file without a message") if upload else False
+    st.caption("PDF, PNG, or JPG up to 5 MB. The file goes with your message when you press Send. Enter sends; Shift+Enter adds a line. Keep PINs, OTPs, and passwords out of uploads.")
+
+if prompt or send_evidence:
+    previous_message_count = len(st.session_state.messages)
+    submit(prompt or "", upload)
+    if len(st.session_state.messages) > previous_message_count:
+        st.session_state.evidence_input_key += 1
+        st.rerun()
+
 st.markdown(
     f"Legal resources · [{LEGAL_AID['label']}]({LEGAL_AID['url']}) explains who can apply "
     "for free legal aid and how to apply."
